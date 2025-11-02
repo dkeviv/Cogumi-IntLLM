@@ -6,6 +6,12 @@ FILE: projective_layer.py
 PURPOSE: ProjectiveLinear layer using QINS logarithmic INT8 encoding
 DEPENDENCIES: torch, torch.nn.functional
 
+⚠️  DEPRECATION WARNING:
+This implementation computes in QINS domain, causing distribution drift
+in autoregressive generation (0.2% match rate). Use qins_codec.QINSLinear
+(Pattern A - Codec-at-Rest) instead, which achieves 100% match by decoding
+weights to FP before computation. See CALIBRATION_FAILURE_ANALYSIS.md
+
 CRITICAL CONCEPTS:
 - INVERSE RELATIONSHIP: Large magnitudes → small stored values
 - Logarithmic encoding: Quantize in log-space for better precision
