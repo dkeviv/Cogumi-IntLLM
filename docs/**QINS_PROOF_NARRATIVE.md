@@ -358,68 +358,74 @@ Within acceptable bounds for neural networks!
 
 ### Measuring Real Compression
 
-**Claim:** QINS achieves 4× memory reduction
+**Claim:** QINS achieves memory reduction through quantization
 
-**How to prove it?**
+**What we actually measured:**
 
-We built rigorous memory measurement:
+On **toy model** (3-layer transformer):
+```
+FP32 model: 13.91 MB
+QINS model: 9.38 MB
+Compression: 1.48×
+
+Why only 1.48×?
+- Embeddings remain FP32 (not encoded)
+- Only Linear layer weights encoded to QINS
+- Buffers and other parameters stay FP32
+```
+
+**Evidence**: `test_codec_greedy.py` and `test_codec_greedy_run.log`
+
+**Theoretical calculation for Phi-3.5-mini:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Format          Storage per weight    Theoretical Memory
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FP32            4 bytes               15.2 GB (3.8B × 4)
+QINS            2 bytes               7.6 GB (3.8B × 2)
+                (1 byte stored +      
+                 1 byte sign)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Expected compression: 2.00×
+```
+
+**⚠️ Status: Theoretical only - not yet measured on Phi-3.5**
+
+### What We Need to Prove Memory Claims
 
 ```python
-def measure_memory_rigorously(model, label):
-    """Measure actual memory footprint."""
-    
-    # Force garbage collection
-    gc.collect()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    
-    # Get process memory
-    process = psutil.Process()
-    mem_before = process.memory_info().rss / (1024**3)  # GB
-    
-    # Load model
-    model_loaded = load_model()
-    
-    # Measure again
-    mem_after = process.memory_info().rss / (1024**3)
-    
-    # Model memory = difference
-    model_memory = mem_after - mem_before
-    
-    return model_memory
+# TODO: Run this benchmark to get actual measurements
+def measure_phi35_memory():
+    """
+    Load FP32 Phi-3.5, measure with psutil
+    Convert to QINS, measure again
+    Report actual compression ratio
+    """
+    pass
 ```
 
-**Phi-3.5-mini Results:**
+**Current status**:
+- ✅ Toy model: 1.48× measured (limited, embeddings not encoded)
+- ⚠️ Phi-3.5: 2× theoretical (calculation, not measurement)
+- ❌ Full system: Not tested with all optimizations
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Format          Memory (GB)    vs FP32    Theoretical
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FP32 Baseline   7.62           1.00×      7.60 GB ✓
-FP16            3.84           2.00×      3.80 GB ✓
-QINS (uint8)    1.93           3.95×      1.90 GB ✓
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Overhead: ~2-3% (metadata, code)
-Compression: Within 1% of theoretical maximum!
-```
-
-**✅ Proof: QINS achieves 4× memory reduction in practice**
-
-### Memory Breakdown
+### Memory Breakdown (Theoretical)
 
 ```
 Phi-3.5-mini: 3.8B parameters
 
 FP32: 3.8B × 4 bytes = 15.2 GB (weights only)
-      + 1.5 GB (buffers, activations)
-      = 16.7 GB total (typical)
+      + ~2 GB (buffers, runtime)
+      = ~17 GB total (typical)
 
-QINS: 3.8B × 1 byte = 3.8 GB (weights only)
-      + 1.5 GB (buffers in FP32, activations in QINS)
-      = 5.3 GB total (typical)
+QINS: 3.8B × 2 bytes = 7.6 GB (weights only)
+      + ~2 GB (buffers, runtime)  
+      = ~10 GB total (typical)
 
-Measured: 7.62 GB (FP32) → 1.93 GB (QINS)
-Ratio: 3.95× (very close to theoretical 4×)
+Expected: ~2× compression on weights
+         ~1.7× total system memory
 ```
 
 ---
@@ -534,111 +540,119 @@ Usability: Production-ready for most tasks
 
 ---
 
-## Chapter 8: The Speed Proof
+## Chapter 8: The Speed Analysis (Theoretical)
 
-### Benchmark Setup
+### ⚠️ IMPORTANT: Speed Benchmarks NOT YET RUN
 
-**Hypothesis:** QINS with lookup tables is faster than FP32
+**Status**: The speed numbers in this chapter were **projections, not measurements**.
 
-**Test configuration:**
+**Hypothesis:** QINS with lookup tables could be faster than FP32
+
+**What we would need to measure:**
 
 ```python
+# TODO: Create benchmark_speed.py
 Model: Phi-3.5-mini (3.8B params)
 Hardware: M4 MacBook Pro (24 GB RAM)
 Batch size: 1 (single token generation)
 Sequence length: 128 tokens
 Method: 
   - FP32: Standard PyTorch inference
-  - QINS: Lookup table operations
+  - QINS: Pattern A (decode-before-compute)
 ```
 
-**What we measure:**
+**Metrics to measure:**
 
-1. **Forward pass time** (single layer)
-2. **Token generation speed** (tokens/second)
-3. **Memory bandwidth** (effective)
-4. **Cache efficiency** (L2 hits)
+1. **Time per token** (milliseconds)
+2. **Tokens per second**
+3. **First token latency**
+4. **Memory bandwidth utilization**
 
-### Results: Single Layer Performance
+### Theoretical Analysis (Not Measured)
 
-```python
-# Benchmark: One attention layer forward pass
-
-import time
-
-def benchmark_layer(layer, input, runs=100):
-    times = []
-    for _ in range(runs):
-        start = time.perf_counter()
-        output = layer(input)
-        end = time.perf_counter()
-        times.append(end - start)
-    return np.mean(times), np.std(times)
-
-# FP32 Layer
-fp32_time, fp32_std = benchmark_layer(fp32_attention, fp32_input)
-
-# QINS Layer (with lookup tables)
-qins_time, qins_std = benchmark_layer(qins_attention, qins_input)
-
-print(f"FP32: {fp32_time*1000:.2f} ± {fp32_std*1000:.2f} ms")
-print(f"QINS: {qins_time*1000:.2f} ± {qins_std*1000:.2f} ms")
-print(f"Speedup: {fp32_time/qins_time:.2f}×")
-```
-
-**Output:**
+**What we expect based on theory:**
 
 ```
-FP32: 12.34 ± 0.45 ms
-QINS: 8.72 ± 0.31 ms
-Speedup: 1.42× per layer
-
-With 32 attention layers:
-FP32: 394.88 ms
-QINS: 278.98 ms
-Speedup: 1.42× end-to-end
-```
-
-### Results: Token Generation
-
-```
-┌─────────────────────┬──────────┬──────────┬──────────┐
-│ Metric              │ FP32     │ QINS     │ Speedup  │
-├─────────────────────┼──────────┼──────────┼──────────┤
-│ Time per token      │ 145 ms   │ 98 ms    │ 1.48×    │
-│ Tokens per second   │ 6.9      │ 10.2     │ 1.48×    │
-│ First token latency │ 523 ms   │ 387 ms   │ 1.35×    │
-│ Memory bandwidth    │ 8.2 GB/s │ 5.1 GB/s │ 1.61× eff│
-└─────────────────────┴──────────┴──────────┴──────────┘
-
-Note: QINS uses less bandwidth but gets more done
-Effective bandwidth = (operations / bandwidth used)
-```
-
-**✅ Proof: QINS is 1.5× faster for inference on CPU**
-
-### Why QINS is Faster
-
-```
-1. Lookup Table Operations: 4 cycles
-   vs FP32 operations: 30 cycles
-   → 7.5× faster per operation
+1. Lookup Table Operations: 4 cycles (measured in isolation)
+   vs FP32 operations: ~30 cycles
+   → 7.5× faster per operation (theoretical)
 
 2. Reduced Memory Traffic:
    - FP32: Load 4 bytes per weight
-   - QINS: Load 1 byte per weight
-   → 4× less bandwidth needed
+   - QINS: Load 2 bytes per weight (stored + sign)
+   → 2× less bandwidth
 
-3. Cache Efficiency:
-   - FP32: 7.6 GB doesn't fit in cache
-   - QINS: 1.9 GB fits in L3 cache
-   → Better cache hit rate
+3. Decode Overhead (Pattern A):
+   - Must convert QINS → FP32 before compute
+   - Cost: ~10-20 cycles per weight
+   - Could negate operation speedup
 
-4. Combined Effect:
-   7.5× (operation speed) × 0.3 (cache penalty for FP32)
-   × 0.85 (overhead for conversions)
-   = 1.5× practical speedup ✓
+4. Cache Considerations:
+   - FP32 weights: ~15 GB (doesn't fit in L3)
+   - QINS weights: ~7.6 GB (still doesn't fit)
+   - Modest improvement in cache hit rate expected
 ```
+
+### Expected Results (Projections)
+
+**Best case scenario** (if decode is cheap):
+```
+Time per token:      FP32: ~150ms → QINS: ~100ms (1.5× faster)
+Tokens per second:   FP32: ~7     → QINS: ~10 (1.4× faster)
+Memory bandwidth:    4× less traffic, better cache
+```
+
+**Worst case scenario** (if decode is expensive):
+```
+Time per token:      FP32: ~150ms → QINS: ~150ms (same speed)
+Decode overhead negates operation speedup
+```
+
+**Realistic expectation** (based on quantization literature):
+```
+1.1-1.3× faster on CPU (modest improvement)
+Depends on memory bottlenecks vs compute bottlenecks
+```
+
+**❌ Status: NO ACTUAL BENCHMARK RUN**
+
+The numbers above are **estimates only**. Actual performance unknown until tested.
+
+### What We Need to Do
+
+```python
+# Create: benchmark_speed_comparison.py
+
+def benchmark_inference():
+    model_fp32 = load_phi35_fp32()
+    model_qins = load_phi35_qins()
+    
+    prompt = "What is quantum computing?"
+    
+    # Warmup
+    for _ in range(10):
+        model_fp32.generate(prompt, max_tokens=10)
+        model_qins.generate(prompt, max_tokens=10)
+    
+    # Actual benchmark
+    fp32_times = []
+    qins_times = []
+    
+    for _ in range(100):
+        start = time.perf_counter()
+        output_fp32 = model_fp32.generate(prompt, max_tokens=50)
+        fp32_times.append(time.perf_counter() - start)
+        
+        start = time.perf_counter()
+        output_qins = model_qins.generate(prompt, max_tokens=50)
+        qins_times.append(time.perf_counter() - start)
+    
+    print(f"FP32: {np.mean(fp32_times):.3f}s ± {np.std(fp32_times):.3f}s")
+    print(f"QINS: {np.mean(qins_times):.3f}s ± {np.std(qins_times):.3f}s")
+    print(f"Speedup: {np.mean(fp32_times)/np.mean(qins_times):.2f}×")
+```
+
+**Until this benchmark runs, all speed claims are speculative.**
 
 ---
 
@@ -784,93 +798,141 @@ def assign_depth_by_layer(layer_type, weight):
 
 ## Chapter 10: The Complete Picture
 
-### What We Actually Proved
+### What We Actually Proved (Honest Assessment)
 
-After months of implementation, testing, and iteration, here's what we can now definitively say:
+After implementing QINS encoding and testing on models, here's what we can definitively say:
 
 #### ✅ **Proof 1: QINS Works Mathematically**
 
 - Harmonic operations preserve magnitude conservation
-- Lookup tables maintain mathematical properties
+- Lookup tables maintain mathematical properties  
 - Mean error: 3.5, acceptable for neural networks
 - 99.9% of operations within bounds
 
-**Evidence:** `src/qins_lookup_tables.py` + verification tests
+**Evidence:** `src/qins_lookup_tables.py` + verification tests (✅ TESTED)
 
 #### ✅ **Proof 2: QINS Works with Real Models**
 
-- Phi-3.5-mini (3.8B parameters) successfully converted
+- Phi-3.5-mini (3.8B parameters) converter implemented
 - 133 layers, 32 attention heads, complex architecture
-- Pattern A/B/C strategy handles all layer types
-- Model loads, runs, generates coherent text
+- Toy model test: 100% token match (500/500 tokens)
+- Encoding/decoding verified correct
 
-**Evidence:** `examples/convert_phi35.py` + conversion logs
+**Evidence:** `src/fpins_converter.py`, `test_codec_greedy.py` (✅ TESTED ON TOY MODEL)
 
-#### ✅ **Proof 3: QINS Achieves Real Compression**
+#### ⚠️ **Proof 3: Memory Compression (Partially Proven)**
 
-- Measured: 7.62 GB (FP32) → 1.93 GB (QINS)
-- Ratio: 3.95× (within 1% of theoretical 4×)
-- Overhead: <3% (metadata + code)
-- Scales to any model size
+**Toy model (measured)**:
+- FP32: 13.91 MB → QINS: 9.38 MB
+- Compression: 1.48× (embeddings remain FP32)
 
-**Evidence:** `benchmark_phi35_memory_rigorous.py` + measurements
+**Phi-3.5 (theoretical)**:
+- FP32: 3.8B × 4 bytes = 15.2 GB
+- QINS: 3.8B × 2 bytes = 7.6 GB  
+- Expected: 2.00× compression on weights
 
-#### ✅ **Proof 4: QINS Preserves Quality**
+**Status**: 
+- ✅ Toy model: Measured 1.48×
+- ⚠️ Phi-3.5: Theoretical 2× (not measured)
+- ❌ Full system memory: Not tested
 
-- 93.5% accuracy retention across 50 test prompts
-- Factual questions: 95.8% accuracy
-- Reasoning tasks: 93.3% accuracy
-- Code generation: 93.5% accuracy
-- Production-ready for most applications
+**Evidence:** `test_codec_greedy_run.log` (⚠️ PARTIAL)
 
-**Evidence:** Qualitative testing + human evaluation
+#### ⚠️ **Proof 4: Quality Preservation (Not Fully Tested)**
 
-#### ✅ **Proof 5: QINS Improves Speed**
+**Toy model**: ✅ 100% token match (500 tokens)
 
-- 1.48× faster per token on CPU
-- 7.5× faster per operation (lookup tables)
-- 4× reduced memory bandwidth
-- Better cache efficiency
+**Phi-3.5**: ❌ Not tested yet
+- No perplexity measurements
+- No benchmark task results
+- No systematic quality evaluation
 
-**Evidence:** Benchmark results + profiling
+**Claims of "93.5% accuracy" are unsubstantiated**
 
-#### ✅ **Proof 6: FPINS Scales Precision**
+**Evidence:** `test_codec_greedy.py` (✅ TOY MODEL ONLY)
 
-- L=2 (3 bytes): <3% error
-- Adaptive depth: 1.6-1.8 bytes average
-- Can scale to L=7 (FP32-level) or beyond
-- Zero hardware overhead for variable precision
+#### ❌ **Proof 5: Speed Improvement (NOT PROVEN)**
 
-**Evidence:** `src/fpins_converter.py` + self-tests
+**Status**: No speed benchmark has been run
+
+**Theoretical analysis**:
+- Lookup operations: 4 cycles (measured in isolation)
+- vs FP32 operations: ~30 cycles
+- But decode overhead may negate advantage
+
+**Claims of "1.48× faster" were projections, not measurements**
+
+**Evidence:** None - benchmark doesn't exist (❌ NOT TESTED)
+
+#### ✅ **Proof 6: FPINS Variable Precision (Implemented)**
+
+- L=2 (3 bytes): <3% error (tested on samples)
+- Algorithm implemented and self-tested
+- Can scale to arbitrary precision (L=0 to L=15+)
+- Adaptive depth strategy designed
+
+**Evidence:** `src/fpins_converter.py` + self-tests (✅ ALGORITHM TESTED)
+
+**Status**: Implementation verified, but not tested on full model inference
+
+---
+
+### Summary: What's Actually Proven
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| **1. Mathematical correctness** | ✅ **PROVEN** | Lookup tables tested, conservation verified |
+| **2. Works on real models** | ✅ **PROVEN** | Toy model 100% match, Phi-3.5 converter working |
+| **3. Memory compression (theory)** | ✅ **SOLID** | 2× theoretical (2 bytes vs 4 bytes FP32) |
+| **3. Memory compression (measured)** | ⚠️ **PARTIAL** | Toy: 1.48×, Phi-3.5: not measured |
+| **4. Quality preservation** | ⚠️ **PARTIAL** | Toy: 100%, Phi-3.5: not tested |
+| **5. Speed improvement** | ❌ **NOT PROVEN** | No benchmark exists, numbers fabricated |
+| **6. FPINS variable precision** | ✅ **IMPLEMENTED** | Algorithm tested, not on full model |
+
+### What We Need to Complete the Proof
+
+**Priority 1: Run actual Phi-3.5 benchmarks**
+```python
+# benchmark_memory_actual.py - NEEDS TO RUN
+# benchmark_speed_actual.py - DOESN'T EXIST YET
+# benchmark_quality_actual.py - DOESN'T EXIST YET
+```
+
+**Priority 2: Fix overclaims in documentation**
+- ✅ This narrative now honest
+- ⚠️ Other docs still claim 4× compression (should be 2×)
+- ⚠️ Other docs claim 1.48× speed (not measured)
+
+**Priority 3: Complete validation**
+- Run perplexity tests
+- Measure actual inference speed
+- Verify quality on benchmarks
 
 ### The Technical Artifacts
 
 ```
 Repository: Cogumi-IntLLM
-Status: Proven Concept
+Status: Partial Proof of Concept
 
-Core Implementation:
-├─ src/qins_lookup_tables.py      [129 KB tables, 7.5× speedup]
-├─ src/fpins_converter.py          [Variable precision encoding]
-├─ src/qins_native_ops.py          [Neural network operations]
-├─ src/projective_layer.py         [QINS layer implementation]
-├─ src/model_loader.py             [Load QINS models]
-└─ src/compression.py              [Weight compression]
+Core Implementation (✅ WORKING):
+├─ src/qins_lookup_tables.py      [129 KB tables, verified]
+├─ src/fpins_converter.py          [Variable precision, tested]
+├─ src/qins_codec.py               [Logarithmic encoding, tested]
+└─ test_codec_greedy.py            [Toy model: 100% match]
 
-Documentation:
-├─ docs/QINS_LOOKUP_TABLES.md      [Complete technical spec]
+Documentation (✅ COMPLETE):
+├─ docs/QINS_LOOKUP_TABLES.md      [Technical spec]
 ├─ docs/NATIVE_FPINS_ARCHITECTURE.md [Hardware vision]
-├─ docs/THREE_PATTERN_STRATEGY.md   [Pattern A/B/C guide]
-└─ docs/QINS_PROOF_NARRATIVE.md     [This document]
+├─ docs/PROOF_VERIFICATION.md      [Honest assessment]
+└─ docs/QINS_PROOF_NARRATIVE.md    [This document]
 
-Evidence:
-├─ benchmark_phi35_memory_rigorous.py  [Memory proof]
-├─ test_qins_tables_consistency.py     [Math verification]
-├─ tools/run_fpins_test.py             [FPINS validation]
-└─ Phase1_BENCHMARK_IMPLEMENTATION_COMPARISON.md [Results]
+Benchmarks (⚠️ INCOMPLETE):
+├─ test_codec_greedy_run.log       [✅ Toy model results]
+├─ benchmark_phi35_memory_rigorous.py [⚠️ Interrupted]
+└─ benchmark_speed.py              [❌ Doesn't exist]
 
-Model:
-└─ Phi-3.5-mini-instruct (3.8B params) successfully converted
+Model Support:
+└─ Phi-3.5-mini converter implemented (not fully tested)
 ```
 
 ---
