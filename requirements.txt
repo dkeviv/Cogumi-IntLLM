@@ -3,7 +3,7 @@
 
 # Deep Learning
 torch>=2.0.0
-transformers>=4.36.0
+transformers==4.44.0  # Pinned: stable version compatible with Phi-3.5 (4.57+ has KV cache issues)
 accelerate>=0.25.0
 
 # Chat Interface

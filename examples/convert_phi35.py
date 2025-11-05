@@ -76,7 +76,7 @@ def main():
     print("\n📊 FP32 Model Statistics:")
     fp32_stats = get_model_statistics(model)
     print(f"  Total parameters: {fp32_stats['total_params'] / 1e9:.2f}B")
-    print(f"  Memory size: {fp32_stats['memory_mb'] / 1024:.2f} GB")
+    print(f"  Memory size: {fp32_stats['memory_fp32_gb']:.2f} GB")
     print(f"  Linear layers: {fp32_stats['linear_layers']}")
     
     # Step 2: Convert to QINS
@@ -90,9 +90,9 @@ def main():
     print("\n📊 QINS Model Statistics:")
     qins_stats = get_model_statistics(model_qins)
     print(f"  Total parameters: {qins_stats['total_params'] / 1e9:.2f}B")
-    print(f"  Memory size: {qins_stats['memory_mb'] / 1024:.2f} GB")
+    print(f"  Memory size: {qins_stats['memory_int8_gb']:.2f} GB")
     print(f"  Projective layers: {qins_stats['projective_layers']}")
-    print(f"  Compression ratio: {fp32_stats['memory_mb'] / qins_stats['memory_mb']:.2f}×")
+    print(f"  Compression ratio: {qins_stats['compression_ratio']:.2f}×")
     
     # Step 3: Verify accuracy
     print("\n✅ Verifying conversion accuracy...")
@@ -136,7 +136,7 @@ def main():
         compressed_size_mb = output_path.stat().st_size / (1024 ** 2)
         print(f"✓ Saved to {args.output}")
         print(f"  Compressed size: {compressed_size_mb:.2f} MB")
-        print(f"  Total compression: {fp32_stats['memory_mb'] / compressed_size_mb:.2f}×")
+        print(f"  Total compression: {fp32_stats['memory_fp32_gb'] * 1024 / compressed_size_mb:.2f}×")
     else:
         print("\n💾 Saving uncompressed QINS model...")
         torch.save(model_qins.state_dict(), args.output)
